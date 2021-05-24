@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  replicas: 5
+  strategy:
+    rollingUpdate:
+      maxSurge: 50%
+      maxUnavailable: 0%
+  minReadySeconds: 5
+  selector:
+    matchLabels:
+      pod: app
+  template:
+    metadata:
+      name: app
+      labels:
+        pod: app
+    spec:
+      containers:
+      - name: app
+        image: shotakukita/kondate_app:v1.0
+        ports:
+        - name: flask
+          containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+spec:
+  selector:
+    pod: app
+  ports:
+  - port: 80  
+    targetPort: flask
+  type: ClusterIP

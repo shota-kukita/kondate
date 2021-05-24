@@ -1,0 +1,162 @@
+---
+### 使い方 (コマンド) ###
+# 1. Ansibleをインストールする。
+#     yum -y install epel-release	EPEL
+#     yum -y install ansible unzip
+# 2. sshで対象ホスト (例：192.168.1.13) に接続できるようにしておく。自分自身に実行する場合は「127.0.0.1」。
+#     ssh-keygen -t rsa -m PEM -q -N ""
+#     ssh-copy-id root@192.168.1.13
+# 3. Ansibleを対象ホスト (例: 192.168.1.13) に対して実行する。
+#     ansible-playbook -i 192.168.1.13, ./kubeadm.yml
+#############
+
+- hosts: all
+  become: true  # sudo権限になる。
+  remote_user: root 
+  tasks:
+
+    ### リモートの設定 ###
+
+    - name: Change sshd config  
+      replace:  # ファイル内の文字列を置換する。
+        dest: '/etc/ssh/sshd_config'  # 対象ファイル
+        regexp: '#MaxSessions 10' # 置換前の文字列。行頭マッチ「^」と行末マッチ「$」を使うことで1行ごとの置換ができる
+        replace: 'MaxSessions 100'  # 置換後の文字列。Docker Composeで複雑な使い方をするとセッション数がデフォルトの10を超える可能性がある。
+      register: sshd_config # taskの結果を変数「sshd_config」に代入する。結果は辞書型でプロパティを持ち、そのうちの「changed」がTrueになる。
+
+    - name: Restart sshd when config changed
+      systemd:  # サービスの起動停止を操作する。
+        name: sshd  # CentOSのsshd
+        state: restarted  # 再起動された状態にする。
+        daemon_reload: yes  # systemdに変更があった場合は起動前にリロードする。
+        enabled: yes  # 起動時の自動開始
+      when: sshd_config.changed # 条件分岐。1つ上のtaskが実行され、変数「sshd_config」の中身「changed」がTrueになっている場合、このtaskも実行される。
+
+    ### ホストの設定、準備 ###
+
+    - name: Filter bridged packets # ブリッジされたパケットをフィルタする。
+      modprobe: # kernelモジュールをロードする。
+        name: br_netfilter  # br_netfilter：iptablesの設定を見て通信を制御する。
+        state: present  # モジュールが存在する状態にする。存在しない場合、ロードする。
+
+    - name: Set iptables to control overlay networks # オーバーレイネットワークを正確に処理できるようにする。k8sクラスタはノード間をVXLANで通信する。
+      sysctl: # /sbin/sysctlを操作する。カーネルの設定。
+        name: "{{ item }}"  # 対象トラフィック。loopに記載。
+        value: 1  # 1：トラフィックを処理する。
+        sysctl_set: yes # sysctl commandで確認する。
+        state: present  # 設定された状態にする。
+        reload: yes # リロードする。
+      loop: # 繰り返す。以下の名前ごとに実行。
+        - net.bridge.bridge-nf-call-iptables  # IPv4
+        - net.bridge.bridge-nf-call-ip6tables # IPv6
+
+    - name: Disable SELinux # SELinuxを一時的に無効化する。こうしなければkubeletがSELinuxのポリシーに引っかかる。
+      command: setenforce 0 # 0：Permissive mode。Disabledにはできない。# TODO 下のtaskがあればこれ不要？
+
+    - name: Set SELinux in disable mode permanently # リブート後もSELinuxを永続的に許可させる。
+      selinux:  # SELinuxを操作する。
+        state: disabled # 無効化する。
+
+    - name: Disable firewalld # ファイアウォールを無効にする。
+      systemd:  # サービスの起動停止を操作する。
+        name: firewalld # CentOSのファイアウォールサービス
+        state: stopped  # 停止した状態にする。
+        enabled: false  # 起動時に自動開始しない
+    
+    - name: Disable swap  # swapを無効にする。下のtaskは反映にOS再起動が必要になるため、このtaskも必要。
+      command: swapoff -a # コマンドで無効化する。 # TODO コマンド以外のAnsibleのmoduleで可能か？下のtaskも。
+
+    - name: Disable swap permanently # swapを永続的に無効にする。
+      replace:  # 文字列を置換する。
+        dest: '/etc/fstab'  # 対象のファイル
+        regexp: '/dev/mapper/cl-swap' # 置換前の文字列。REGular EXPression。正規表現。
+        replace: '# /dev/mapper/cl-swap' # 置換後の文字列。コメントアウトして無効化。
+
+    - name: Remove swapfile # swapを消す。
+      mount:  # mount point を操作する。
+        name: swap  # 対象
+        fstype: swap  # 対象
+        state: absent # 無効にして取り除く
+
+    ### Dockerのインストール ###
+
+    - name: Install packages for Docker # Dockerに必要なパッケージをインストールする。
+      yum:  # yumでインストールされた状態にする。
+        name: "yum-utils,device-mapper-persistent-data,lvm2,zip,unzip"  # パッケージ名を指定する。
+        state: latest # latest:最新版へアップデートされた状態。present:インストールされた状態。absent:アンインストールされた状態。
+
+    - name: Add Docker repo # Dockerのリポジトリを追加する。
+      get_url:  # http, https, ftpでファイルをダウンロードする。
+        url: https://download.docker.com/linux/centos/docker-ce.repo  # ダウンロードするファイルのURL。
+        dest: /etc/yum.repos.d/docer-ce.repo  # 保存先のディレクトリ + ファイル名。「/etc/yum.repos.d」に保存するとyumリポジトリを追加できる。
+
+    - name: Enable Docker Stable repo
+      ini_file: # 設定を調整する。
+        dest: /etc/yum.repos.d/docer-ce.repo  # パス。「path:」で指定してもOK。
+        section: "docker-ce-stable" # "docker-ce.repo"に記載の9種類から選ぶ。stable:安定版。nightly:最新版。test:テスト版。
+        option: enabled # "docker-ce.repo"の"docker-ce-stable"で、「enable」を対象にする。
+        value: "1"  # 「enable」を1にする。
+
+    - name: Install docker
+      yum:  # yumでインストールされた状態にする。
+        name: "docker-ce,docker-ce-cli,containerd.io" # パッケージ名を指定する。
+        state: latest # 最新版
+
+    - name: Download Docker Compose 
+      get_url:  # http, https, ftpでファイルをダウンロードする。
+        url: https://github.com/docker/compose/releases/download/1.24.1/docker-compose-Linux-x86_64 # ダウンロードするファイルのURL。
+        dest: /usr/local/bin/docker-compose # 保存先のディレクトリ + ファイル名。
+        mode: 0511  # 権限の状態。所有者は読み取り、実行。所有グループは実行。その他は実行。
+        
+    - name: Start/Enable docker # Dockerの起動と自動開始
+      systemd:  # サービスの起動停止を操作する。
+        name: docker  # docker
+        state: started  # 起動させた状態にする。
+        daemon_reload: no # systemdに変更があってもリロードしない。
+        enabled: yes  # 起動時の自動開始
+
+    ### Kubernetesのインストール ###
+
+    - name: add kubernetes repo
+      yum_repository:
+        name: kubernetes
+        description: kubernetes repo  #
+        baseurl: https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+        gpgcheck: yes # パッケージのGPG signatureファイルを使ってダウンロードしたファイルを検証する。
+        enabled: yes  # yumがこのリポジトリを使う。
+        repo_gpgcheck: yes # GPG signatureファイルを使ってrepodataを検証する。
+        gpgkey:
+          - https://packages.cloud.google.com/yum/doc/yum-key.gpg
+          - https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+
+    - name: Install packages for Kubernetes # Kubernetesに必要なパッケージをインストールする。
+      yum:  # yumでインストールされた状態にする。
+        name: "kubelet,kubeadm,kubectl"  # パッケージ名を指定する。
+        state: latest # latest:最新版へアップデートされた状態。
+
+    - name: Check whether kubectl exist or not  
+      stat: path=/var/lib/kubelet/config.yaml # ファイルの状態を取得する。ファイルが存在すればstatのexistsプロパティ「exists」がTrueになる。
+      register: result1 # 結果を変数「result1」に格納する。結果は辞書型で、ファイルを取得できていれば「stat.exists」がTrueになっている。
+
+    - name: Create kubelet directory  # ディレクトリがなければ作る。
+      when: not result1.stat.exists # 1つ上のtaskで「stat.exists」がTrueになっていなければ実行する。    
+      file: # ディレクトリやファイルを操作する。
+        path: /var/lib/kubelet  # ディレクトリ
+        state: directory  # ディレクトリを作成する。
+        mode: 0644  # 権限。所有者は読み取りと書き込み。所有グループは読み取り。その他は読み取り。
+
+    - name: create kubelet config file  # kubeadmでのkubeletに必要な設定ファイルを作る。
+      when: not result1.stat.exists # 2つ上のtaskで「stat.exists」がTrueになっていなければ実行する。
+      copy: # 「content」に記載した内容を「dest」に作成する。
+        dest: /var/lib/kubelet/config.yaml  # ディレクトリ + ファイル名。ここにkubeletのパラメーターを設定する。
+        content: |  # 「|(パイプ)」は、以下に記載の内容を文字列として扱う。改行も反映される。
+          kind: KubeletConfiguration  # kubeadmは一元的な設定管理のための「KubeletConfigurationAPI」が提供されている。
+          apiVersion: kubelet.config.k8s.io/v1beta1 # APIのバージョン。
+          cgroupDriver: "systemd" # コンテナランタイムとkubeletがcgroupドライバーとしてsystemdを使用することでシステムが安定する。
+    
+    - name: Start/Enable kubelet  # kubeletの起動と自動開始
+      systemd:  # サービスの起動停止を操作する。
+        name: kubelet  # kubelet
+        state: started  # 起動させた状態にする。
+        daemon_reload: no # systemdに変更があってもリロードしない。
+        enabled: yes  # 起動時の自動開始

@@ -1,0 +1,57 @@
+version: "3.8"
+services:
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: shotakukita/kondate_web:v1.0
+    links:
+      - app
+    ports:
+      - "80:80"
+    networks:
+      - kondate_network
+    depends_on:
+      - app
+
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    image: shotakukita/kondate_app:v1.0
+    links:
+      - database
+    networks:
+      - kondate_network
+    depends_on:
+      - database
+    volumes:
+    - ./app:/app
+
+  database:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    image: shotakukita/kondate_database:v1.0
+    env_file: .env
+    environment:
+      MYSQL_DATABASE: ${DATABASE}
+      MYSQL_USER: ${USERNAME}
+      MYSQL_PASSWORD: ${USERPASS}
+      MYSQL_ROOT_PASSWORD: ${ROOTPASS}
+    networks:
+      - kondate_network
+    ports:
+      - "3306:3306"
+    volumes:
+      - kondate_mysql_volume:/var/lib/mysql
+      - ./database/initdb.d:/docker-entrypoint-initdb.d # 新規立ち上げ時は以下を実行し、バックアップから復元する。
+
+networks:
+  kondate_network:
+    driver: bridge
+
+volumes:
+  kondate_mysql_volume:
+    driver: local

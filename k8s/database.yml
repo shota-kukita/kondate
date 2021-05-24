@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: database
+spec:
+  selector:
+    pod: database
+  ports:
+  - port: 3306
+    targetPort: mysql
+    nodePort: 30001
+  type: NodePort
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: database
+  labels: 
+    pod: database
+spec:
+  containers:
+  - name: database
+    image: shotakukita/kondate_database:v1.6
+    env:
+    - name: MYSQL_ROOT_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: databasesecret4
+          key: password
+    ports:
+    - name: mysql
+      containerPort: 3306
+    volumeMounts: # volumeをどこにマウントするか指定する。
+    - name: mysqlpv
+      mountPath: "/var/lib/mysql"
+  volumes:  # コンテナに提供するボリュームを指定する。
+  - name: mysqlpv
+    persistentVolumeClaim:
+      claimName: pvc

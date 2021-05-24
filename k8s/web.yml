@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 5
+  strategy:
+    rollingUpdate:
+      maxSurge: 50%
+      maxUnavailable: 0%
+  minReadySeconds: 5
+  selector:
+    matchLabels:
+      pod: web
+  template:
+    metadata:
+      name: web
+      labels:
+        pod: web
+    spec:
+      containers:
+      - name: web
+        image: shotakukita/kondate_web:v1.0
+        ports:
+        - name: http
+          containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  selector:
+    pod: web
+  ports:
+  - port: 8080
+    targetPort: http
+    nodePort: 30000
+  type: NodePort

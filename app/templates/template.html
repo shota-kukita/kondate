@@ -1,0 +1,34 @@
+<html>
+    <head>
+        <!-- Contents -->
+        <meta charset="utf-8">
+            <!-- <link  href="/static/css/style.css" rel="stylesheet" > -->
+            {% if title %}
+                <title>{{ title }}</title>
+            {% else %}
+                <title>kondate</title>
+            {% endif %}
+    </head>
+    <body>
+        <div>
+            <table><tr>
+                <th><a href="/"><button type="submit">トップページ</button></a></th>
+                <th><a href="/"><button type="submit">献立を決める</button></a></th>
+                <th><a href="/show_food"><button type="submit">新しい食材を登録する</button></a>
+                <th><a href="/show_menu"><button type="submit">新しいメニューを登録する</button></a>
+                <th><a href="/get_nutrients_input"><button type="submit">栄養を見る</button></a></th>
+                <th><a href="/regist_food_nutrients_input"><button type="submit">食品の栄養素</button></a></th>
+                <th><a href="/test"><button type="submit">test</button></a></th>
+                <th><a href="/kondate/theday/input"><button type="submit">あの日の献立</button></th>
+            </tr></table>
+            {{ button | safe }}
+        </div>
+        {% if contents %}
+            <div>{{ contents | safe }}</div>
+        {% else %}
+            <div></div>
+        {% endif %}
+    </body>
+    <!-- <footer>
+    </footer> -->
+</html>
